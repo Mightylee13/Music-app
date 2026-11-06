@@ -691,7 +691,7 @@ async function createScraperMusicHlsSession(
     query: `${title} ${artist}`.slice(0, 160),
     region: "NG",
     probeStreaming: false,
-    timeoutMs: 12_000,
+    timeoutMs: 30_000, // INCREASED TO 30 SECONDS FOR AUDIOMACK/SOUNDCLOUD
     filter: "songs",
   });
   
