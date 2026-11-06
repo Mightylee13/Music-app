@@ -21,18 +21,19 @@ function runCmd(cmd, args, timeout = 15000) {
     });
 }
 
-// Helper to search Audiomack API natively
+// Query the CORRECT Audiomack API endpoint
 function searchAudiomack(q) {
     return new Promise((resolve, reject) => {
-        const url = `https://api.audiomack.com/v1/music/search?q=${encodeURIComponent(q)}&limit=1`;
+        const url = `https://api.audiomack.com/v1/search?q=${encodeURIComponent(q)}&limit=1`;
         https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => {
                 try {
                     const parsed = JSON.parse(data);
+                    // The search endpoint returns results in a 'results' array
                     if (parsed.results && parsed.results.length > 0) {
-                        resolve(parsed.results[0].url); // Returns the Audiomack track URL
+                        resolve(parsed.results[0].url); 
                     } else {
                         reject(new Error("No results from Audiomack API"));
                     }
@@ -52,7 +53,10 @@ async function getStream() {
             const trackUrl = await searchAudiomack(query);
             console.error(`[Scraper] Found Audiomack URL. Extracting stream...`);
             
-            const streamOut = await runCmd('yt-dlp', ['--quiet', '--no-warnings', trackUrl, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
+            const streamOut = await runCmd('yt-dlp', [
+                '--quiet', '--no-warnings', '--impersonate', 'chrome', 
+                trackUrl, '-f', 'bestaudio', '-g', '--no-playlist'
+            ], 15000);
             resolve({ url: streamOut.trim().split('\n')[0], source: 'Audiomack' });
         } catch (e) { 
             console.error(`[Scraper] Audiomack failed: ${e.message}`);
@@ -60,11 +64,14 @@ async function getStream() {
         }
     });
 
-    // 2. SoundCloud (Secondary)
+    // 2. SoundCloud (Secondary with Impersonation)
     const soundPromise = new Promise(async (resolve, reject) => {
         try {
             console.error(`[Scraper] Searching SoundCloud...`);
-            const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `scsearch1:${query}`, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
+            const out = await runCmd('yt-dlp', [
+                '--quiet', '--no-warnings', '--impersonate', 'chrome', 
+                `scsearch1:${query}`, '-f', 'bestaudio', '-g', '--no-playlist'
+            ], 15000);
             resolve({ url: out.trim().split('\n')[0], source: 'SoundCloud' });
         } catch (e) { 
             console.error(`[Scraper] SoundCloud failed: ${e.message}`);
@@ -91,11 +98,9 @@ async function getStream() {
     });
 
     try {
-        // Wait for the first one to succeed
         const winner = await Promise.any([audioPromise, soundPromise, ytPromise]);
         activeProcesses.forEach(p => { try { p.kill(); } catch(e) {} });
         
-        // Print the final JSON to stdout
         console.log(JSON.stringify({
             status: true,
             source: winner.source,
