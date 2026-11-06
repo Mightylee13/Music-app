@@ -1,5 +1,6 @@
 // attached_assets/god-tier-music.js
 const { execFile } = require('node:child_process');
+const https = require('node:https');
 
 const query = process.argv[2];
 if (!query) {
@@ -11,12 +12,33 @@ function runCmd(cmd, args, timeout = 15000) {
     return new Promise((resolve, reject) => {
         const child = execFile(cmd, args, { maxBuffer: 1024 * 1024 * 10, timeout }, (error, stdout, stderr) => {
             if (error) {
-                // Append stderr so the backend logs can see exactly why it failed
                 error.message += ` | stderr: ${stderr}`;
                 reject(error);
+            } else {
+                resolve(stdout);
             }
-            else resolve(stdout);
         });
+    });
+}
+
+// Helper to search Audiomack API natively
+function searchAudiomack(q) {
+    return new Promise((resolve, reject) => {
+        const url = `https://api.audiomack.com/v1/music/search?q=${encodeURIComponent(q)}&limit=1`;
+        https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    const parsed = JSON.parse(data);
+                    if (parsed.results && parsed.results.length > 0) {
+                        resolve(parsed.results[0].url); // Returns the Audiomack track URL
+                    } else {
+                        reject(new Error("No results from Audiomack API"));
+                    }
+                } catch (e) { reject(e); }
+            });
+        }).on('error', reject);
     });
 }
 
@@ -26,12 +48,11 @@ async function getStream() {
     // 1. Audiomack (Primary)
     const audioPromise = new Promise(async (resolve, reject) => {
         try {
-            console.error(`[Scraper] Trying Audiomack...`);
-            const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `https://audiomack.com/search?q=${encodeURIComponent(query)}`, '--dump-json', '--flat-playlist'], 15000);
-            const results = out.trim().split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
-            if (results.length === 0) throw new Error("No Audio results");
+            console.error(`[Scraper] Querying Audiomack API...`);
+            const trackUrl = await searchAudiomack(query);
+            console.error(`[Scraper] Found Audiomack URL. Extracting stream...`);
             
-            const streamOut = await runCmd('yt-dlp', ['--quiet', '--no-warnings', results[0].url, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
+            const streamOut = await runCmd('yt-dlp', ['--quiet', '--no-warnings', trackUrl, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
             resolve({ url: streamOut.trim().split('\n')[0], source: 'Audiomack' });
         } catch (e) { 
             console.error(`[Scraper] Audiomack failed: ${e.message}`);
@@ -42,7 +63,7 @@ async function getStream() {
     // 2. SoundCloud (Secondary)
     const soundPromise = new Promise(async (resolve, reject) => {
         try {
-            console.error(`[Scraper] Trying SoundCloud...`);
+            console.error(`[Scraper] Searching SoundCloud...`);
             const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `scsearch1:${query}`, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
             resolve({ url: out.trim().split('\n')[0], source: 'SoundCloud' });
         } catch (e) { 
@@ -53,7 +74,7 @@ async function getStream() {
 
     // 3. YouTube Custom Script (Last Resort)
     const ytPromise = new Promise((resolve, reject) => {
-        console.error(`[Scraper] Trying YouTube...`);
+        console.error(`[Scraper] Trying YouTube custom script...`);
         const child = execFile('node', [`./attached_assets/scrape-ytmusik_1793744644906.js`, query, '--stream', '1'], { timeout: 5000 }, (err, stdout, stderr) => {
             if (err) {
                 console.error(`[Scraper] YouTube failed: ${err.message}`);
@@ -63,7 +84,7 @@ async function getStream() {
                 const data = JSON.parse(stdout);
                 const url = data.results?.songs?.[0]?.streaming?.stream_url;
                 if (url) resolve({ url, source: 'YouTube' });
-                else reject(new Error('No URL'));
+                else reject(new Error('No URL in YouTube response'));
             } catch (e) { reject(e); }
         });
         activeProcesses.push(child);
@@ -74,6 +95,7 @@ async function getStream() {
         const winner = await Promise.any([audioPromise, soundPromise, ytPromise]);
         activeProcesses.forEach(p => { try { p.kill(); } catch(e) {} });
         
+        // Print the final JSON to stdout
         console.log(JSON.stringify({
             status: true,
             source: winner.source,
@@ -90,8 +112,8 @@ async function getStream() {
             }
         }));
     } catch (error) {
-        console.error(`[Scraper] All failed: ${error.message}`);
-        console.log(JSON.stringify({ status: false, error: `Not found: ${error.message}` }));
+        console.error(`[Scraper] All platforms failed.`);
+        console.log(JSON.stringify({ status: false, error: "Song not found on any platform." }));
     }
 }
 
