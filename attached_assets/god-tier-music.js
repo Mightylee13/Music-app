@@ -4,7 +4,7 @@ const { execFile } = require('node:child_process');
 const query = process.argv[2];
 if (!query) {
     console.log(JSON.stringify({ status: false, error: "No query provided" }));
-    process.exit(1);
+    process.exit(0);
 }
 
 function runCmd(cmd, args, timeout = 8000) {
@@ -41,7 +41,7 @@ async function getStream() {
 
     // 3. YouTube Custom Script (Last Resort)
     const ytPromise = new Promise((resolve, reject) => {
-        const child = execFile('node', [`./attached_assets/scrape-ytmusik_1793744644906.js`, query, '--stream', '1'], { timeout: 3500 }, (err, stdout) => {
+        const child = execFile('node', [`./attached_assets/scrape-ytmusik_1793744644906.js`, query, '--stream', '1'], { timeout: 4000 }, (err, stdout) => {
             if (err) return reject(err);
             try {
                 const data = JSON.parse(stdout);
@@ -57,7 +57,7 @@ async function getStream() {
         const winner = await Promise.any([audioPromise, soundPromise, ytPromise]);
         activeProcesses.forEach(p => { try { p.kill(); } catch(e) {} });
         
-        // PRINT ONLY VALID JSON TO STDOUT
+        // Clean JSON Output
         console.log(JSON.stringify({
             status: true,
             source: winner.source,
@@ -74,7 +74,7 @@ async function getStream() {
             }
         }));
     } catch (error) {
-        // PRINT ONLY VALID JSON ON FAILURE
+        // Clean JSON Error Output
         console.log(JSON.stringify({ status: false, error: "Song not found on any platform." }));
     }
 }
