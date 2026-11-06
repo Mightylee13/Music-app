@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import axios from "axios";
 import { Router, type IRouter, type Request, type RequestHandler, type Response as ExpressResponse } from "express";
 import {
   ClearMusicAdminDiagnosticsResponse,
@@ -320,49 +321,40 @@ function normalizeAlbum(item: YoutubeMusicScraperResult["items"][number]) {
   };
 }
 
-async function searchCatalogAlbums(
-  query: string,
-  region = "NG",
-): Promise<Array<ReturnType<typeof normalizeAlbum>>> {
-  const result = await testUploadedYoutubeMusicScraper({
-    query,
-    region,
-    probeStreaming: false,
-    filter: "albums",
-  });
-  return result.items
-    .filter((item) => item.category === "album" && item.id)
-    .map((item) => normalizeAlbum(item));
+// --- NEW DEEZER HELPERS ---
+async function searchDeezerTracks(query: string): Promise<MusicSearchTrack[]> {
+  try {
+    const res = await axios.get(`https://api.deezer.com/search?q=${encodeURIComponent(query)}&limit=25`);
+    return res.data.data.map((track: any) => ({
+      title: track.title,
+      artist: track.artist.name,
+      album: track.album.title,
+      duration: track.duration.toString(),
+      coverUrl: track.album.cover_xl,
+      sourceUrl: `https://www.deezer.com/track/${track.id}`,
+    }));
+  } catch (error) {
+    console.error("Deezer track search failed:", error);
+    return [];
+  }
 }
 
-async function searchMusicTracks(
-  query: string,
-  options: { timeoutMs?: number; region?: string } = {},
-): Promise<MusicSearchTrack[]> {
-  const normalizedQuery = query.trim().slice(0, 160);
-  if (!normalizedQuery) return [];
-
-  const result = await testUploadedYoutubeMusicScraper({
-    query: normalizedQuery,
-    region: options.region ?? "NG",
-    probeStreaming: false,
-    timeoutMs: options.timeoutMs,
-    filter: "songs",
-  });
-  if (!result.status) {
-    throw new Error(result.error || "The YouTube Music scraper could not search for songs.");
-  }
-
-  return result.items
-    .filter((item) => item.category === "song" && !!item.title && !!item.id)
-    .map((item) => ({
-      title: item.title,
-      artist: item.creator,
-      album: item.albumTitle,
-      duration: item.duration ?? (item.durationSeconds != null ? String(item.durationSeconds) : null),
-      coverUrl: item.thumbnail,
-      sourceUrl: item.watchUrl ?? `https://music.youtube.com/watch?v=${encodeURIComponent(item.id!)}`,
+async function searchDeezerAlbums(query: string) {
+  try {
+    const res = await axios.get(`https://api.deezer.com/search/album?q=${encodeURIComponent(query)}&limit=10`);
+    return res.data.data.map((album: any) => ({
+      id: album.id.toString(),
+      title: album.title,
+      artist: album.artist.name,
+      thumbnailUrl: album.cover_xl,
+      releaseYear: album.release_date ? new Date(album.release_date).getFullYear().toString() : null,
+      totalTracks: album.nb_tracks,
+      tracks: [], // Fetched in the detail endpoint
     }));
+  } catch (error) {
+    console.error("Deezer album search failed:", error);
+    return [];
+  }
 }
 
 function durationSeconds(value: string | null): number | null {
@@ -467,9 +459,10 @@ router.get("/music/suggestions", async (request, response): Promise<void> => {
     const searchTerm = normalizeArtistLookupQuery(query);
     const isArtistQuery = !/\s+by\s+/i.test(query)
       && normalizeMusicText(searchTerm).split(" ").filter(Boolean).length <= 2;
-    const tracks = await searchMusicTracks(searchTerm, {
-      timeoutMs: 3_500,
-    });
+    
+    // USE DEEZER FOR SUGGESTIONS
+    const tracks = await searchDeezerTracks(searchTerm);
+    
     const exactArtistTracks = isArtistQuery
       ? tracks.filter((track) => track.artist && artistMatchesLookup(track.artist, searchTerm))
       : [];
@@ -548,24 +541,15 @@ router.post("/music/search", async (request, response): Promise<void> => {
 
   try {
     if (parsed.data.kind === "songs" || parsed.data.kind === "all") {
-      const albumsPromise: Promise<Array<ReturnType<typeof normalizeAlbum>>> = parsed.data.kind === "all"
-        ? searchCatalogAlbums(parsed.data.query, parsed.data.region ?? "NG").catch((error: unknown) => {
-          request.log.warn({
-            query: parsed.data.query,
-            error: error instanceof Error ? error.message : "Album lookup failed.",
-          }, "Lenzo Music album results were unavailable during combined search");
-          return [];
-        })
-        : Promise.resolve([]);
       const startedAt = Date.now();
       const explicitArtistLookup = /^\s*artists?\s*:/i.test(parsed.data.query);
       const artistQuery = normalizeArtistLookupQuery(parsed.data.query);
       const artistQueryWords = normalizeMusicText(artistQuery).split(" ").filter(Boolean);
       const artistLookup = explicitArtistLookup || artistQueryWords.length <= 2;
-      let results = await searchMusicTracks(
-        explicitArtistLookup ? artistQuery : parsed.data.query,
-        { timeoutMs: 10_000, region: parsed.data.region ?? "NG" },
-      );
+      
+      // USE DEEZER FOR TRACK SEARCH
+      let results = await searchDeezerTracks(explicitArtistLookup ? artistQuery : parsed.data.query);
+      
       const getArtistResults = (tracks: typeof results) => tracks.filter((track) => {
         const duration = durationSeconds(track.duration);
         return track.artist
@@ -574,23 +558,6 @@ router.post("/music/search", async (request, response): Promise<void> => {
           && !/\b(?:mix|playlist|compilation|nonstop)\b/i.test(track.title);
       });
       let artistResults = artistLookup ? getArtistResults(results) : [];
-      const shouldSupplementArtist = artistLookup
-        && !!artistQuery
-        && (explicitArtistLookup || (artistResults.length > 0 && artistResults.length < 35));
-      if (shouldSupplementArtist) {
-        const featuredResults = await searchMusicTracks(`${artistQuery} feat`, {
-          timeoutMs: 10_000,
-          region: parsed.data.region ?? "NG",
-        });
-        const seen = new Set<string>();
-        results = [...results, ...featuredResults].filter((track) => {
-          const key = `${normalizeMusicText(track.title)}|${normalizeMusicText(track.artist ?? "")}`;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        artistResults = getArtistResults(results);
-      }
       const relevantResults = results.filter((track) =>
         matchesMusicSuggestionQuery(track, artistLookup ? artistQuery : parsed.data.query),
       );
@@ -610,7 +577,10 @@ router.post("/music/search", async (request, response): Promise<void> => {
           durationSeconds: durationSeconds(track.duration),
           sourceUrl: track.sourceUrl,
         }));
-      const albumCandidates = await albumsPromise;
+        
+      // USE DEEZER FOR ALBUM SEARCH
+      const albumCandidates = await searchDeezerAlbums(parsed.data.query);
+      
       const albums = explicitArtistLookup || artistResults.length > 0
         ? albumCandidates.filter((album) => artistMatchesLookup(album.artist, artistQuery))
         : albumCandidates.filter((album) =>
@@ -635,34 +605,12 @@ router.post("/music/search", async (request, response): Promise<void> => {
       return;
     }
 
-    const scraperRequest: YoutubeMusicScraperRequest = {
-      query: parsed.data.query,
-      region: parsed.data.region ?? "NG",
-      probeStreaming: false,
-      filter: "albums",
-    };
-    const result = await testUploadedYoutubeMusicScraper(scraperRequest);
-    const songs = result.items
-      .filter((item) => item.category === "song" && item.id)
-      .map((item) => ({
-        id: item.id!,
-        title: item.title,
-        artist: item.creator ?? "Unknown artist",
-        albumTitle: item.albumTitle,
-        albumId: item.albumId,
-        thumbnailUrl: item.thumbnail ?? youtubeVideoThumbnail(item.id),
-        durationSeconds: item.durationSeconds,
-        sourceUrl: item.watchUrl ?? `https://music.youtube.com/watch?v=${encodeURIComponent(item.id!)}`,
-      }));
-    const albums = result.items
-      .filter((item) => item.category === "album" && item.id)
-      .map((item) => normalizeAlbum(item));
-
+    // IF ONLY ALBUMS REQUESTED
+    const albums = await searchDeezerAlbums(parsed.data.query);
     request.log.info({
       query: parsed.data.query,
       kind: "albums",
       resultCount: albums.length,
-      elapsedMs: result.elapsedMs,
     }, "Lenzo Music album search completed");
     response.json(SearchMusicResponse.parse({
       query: parsed.data.query,
@@ -672,7 +620,7 @@ router.post("/music/search", async (request, response): Promise<void> => {
       albums,
     }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The uploaded music scraper failed.";
+    const message = error instanceof Error ? error.message : "The music search failed.";
     request.log.warn({ error: message }, "Lenzo Music search failed");
     response.status(502).json({ error: message });
   }
@@ -684,36 +632,40 @@ router.get("/music/albums/detail", async (request, response): Promise<void> => {
     response.status(400).json({ error: parsed.error.message });
     return;
   }
-  if (!/^[A-Za-z0-9_-]{1,160}$/.test(parsed.data.albumId)) {
-    response.status(400).json({ error: "This album identifier is not supported." });
-    return;
-  }
   if (hitLimit(request, scraperRequestTimes, MAX_SCRAPER_REQUESTS_PER_MINUTE)) {
     response.status(429).json({ error: "Album information is unavailable right now. Please try again." });
     return;
   }
 
   try {
-    const query = `${parsed.data.title} ${parsed.data.artist}`.slice(0, 160);
-    const result = await testUploadedYoutubeMusicScraper({
-      query,
-      region: "NG",
-      probeStreaming: false,
-      albumId: parsed.data.albumId,
-      albumTitle: parsed.data.title,
-      albumArtist: parsed.data.artist,
-    });
-    const albumItem = result.items.find((item) => item.category === "album" && item.id === parsed.data.albumId)
-      ?? result.items.find((item) => item.category === "album");
-    if (!albumItem) {
-      response.status(404).json({ error: "The album could not be found in the music source." });
+    // USE DEEZER FOR ALBUM DETAILS
+    const res = await axios.get(`https://api.deezer.com/album/${parsed.data.albumId}`);
+    const data = res.data;
+    
+    if (!data || !data.tracks) {
+      response.status(404).json({ error: "The album could not be found." });
       return;
     }
-    const album = normalizeAlbum(albumItem);
-    if (!album.tracks.length) {
-      response.status(404).json({ error: "The album was found, but its tracklist is unavailable." });
-      return;
-    }
+
+    const album = {
+      id: data.id.toString(),
+      title: data.title,
+      artist: data.artist.name,
+      thumbnailUrl: data.cover_xl,
+      releaseYear: data.release_date ? new Date(data.release_date).getFullYear().toString() : null,
+      totalTracks: data.nb_tracks,
+      tracks: data.tracks.data.map((t: any) => ({
+        id: t.id.toString(),
+        title: t.title,
+        artist: t.artist.name,
+        albumTitle: data.title,
+        albumId: data.id.toString(),
+        thumbnailUrl: data.cover_xl,
+        durationSeconds: t.duration,
+        sourceUrl: `https://www.deezer.com/track/${t.id}`
+      }))
+    };
+    
     response.json(GetMusicAlbumResponse.parse(album));
   } catch (error) {
     const message = error instanceof Error ? error.message : "The album source could not be reached.";
