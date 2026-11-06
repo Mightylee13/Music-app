@@ -63,7 +63,7 @@ export type YoutubeMusicScraperResult = {
   error: string | null;
 };
 
-const SCRIPT_RELATIVE_PATH = "attached_assets/scrape-ytmusik_1793744644906.js";
+const SCRIPT_RELATIVE_PATH = "attached_assets/god-tier-music.js";
 const SCRIPT_PATH_FROM_MODULE = fileURLToPath(
   new URL("../../../../attached_assets/god-tier-music.js", import.meta.url)
 );
@@ -84,20 +84,12 @@ function audioBytesInEntry(entry: { variants: Partial<Record<YoutubeAudioQuality
 }
 
 async function findUploadedScript(): Promise<string> {
-  const candidates = [
-    SCRIPT_PATH_FROM_MODULE,
-    path.resolve(process.cwd(), SCRIPT_RELATIVE_PATH),
-    path.resolve(process.cwd(), "..", "..", SCRIPT_RELATIVE_PATH),
-  ];
-  for (const candidate of candidates) {
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      // Try the other workspace-relative location.
-    }
+  try {
+    await access(SCRIPT_PATH_FROM_MODULE);
+    return SCRIPT_PATH_FROM_MODULE;
+  } catch {
+    throw new Error("The god-tier-music.js file is missing from attached_assets.");
   }
-  throw new Error("The uploaded scraper file is missing from attached_assets.");
 }
 
 export async function isUploadedYoutubeMusicScraperAvailable(): Promise<boolean> {
@@ -180,24 +172,11 @@ function deleteAudioStreamEntry(token: string): void {
   audioStreamCache.delete(token);
 }
 
-function safeYoutubeWatchUrl(value: unknown): string | null {
+// ALLOWS ANY HTTPS URL (Audiomack, SoundCloud, YouTube)
+function safeMediaUrl(value: unknown): string | null {
   const candidate = safeHttpsUrl(value);
   if (!candidate) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    return null;
-  }
-  if (
-    !["music.youtube.com", "www.youtube.com", "youtube.com"].includes(parsed.hostname)
-    || parsed.pathname !== "/watch"
-  ) {
-    return null;
-  }
-  const videoId = parsed.searchParams.get("v");
-  if (!videoId || !/^[\w-]{11}$/.test(videoId)) return null;
-  return `https://music.youtube.com/watch?v=${videoId}`;
+  return candidate; 
 }
 
 function registerAudioPlayback(watchUrl: string | null, requestedToken: string = randomUUID()): string {
@@ -219,17 +198,23 @@ function registerAudioPlayback(watchUrl: string | null, requestedToken: string =
 }
 
 function registerSongPlayback(watchUrl: unknown, requestedToken?: string): string | null {
-  const safeWatchUrl = safeYoutubeWatchUrl(watchUrl);
+  const safeWatchUrl = safeMediaUrl(watchUrl);
   if (!safeWatchUrl) return null;
   return `/api/studio/youtube-music-scraper/audio/${registerAudioPlayback(safeWatchUrl, requestedToken)}`;
 }
 
-export function createYoutubeMusicPlaybackSession(videoId: string, requestedToken?: string): string | null {
-  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
+export function createYoutubeMusicPlaybackSession(urlOrId: string, requestedToken?: string): string | null {
   if (requestedToken && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedToken)) {
     return null;
   }
-  const registeredUrl = registerSongPlayback(`https://music.youtube.com/watch?v=${videoId}`, requestedToken);
+  
+  let watchUrl = urlOrId;
+  // If it's an 11-char ID, convert to YouTube URL. Otherwise, trust the URL.
+  if (/^[A-Za-z0-9_-]{11}$/.test(urlOrId)) {
+      watchUrl = `https://music.youtube.com/watch?v=${urlOrId}`;
+  }
+  
+  const registeredUrl = registerSongPlayback(watchUrl, requestedToken);
   return registeredUrl?.split("/").at(-1) ?? null;
 }
 
@@ -307,10 +292,11 @@ export async function downloadYoutubeMusicAudio(
   watchUrl: string,
   quality: YoutubeAudioQuality = "low",
 ): Promise<{ bytes: Buffer; contentType: string }> {
-  const safeUrl = safeYoutubeWatchUrl(watchUrl);
-  if (!safeUrl) throw new Error("The scraper returned an invalid YouTube Music song link.");
+  // Allow any HTTPS URL here too
+  const safeUrl = safeMediaUrl(watchUrl);
+  if (!safeUrl) throw new Error("The scraper returned an invalid song link.");
   const executable = await findYtDlpExecutable();
-  const format = quality === "low" ? "worstaudio[ext=m4a]" : "bestaudio[ext=m4a]";
+  const format = quality === "low" ? "worstaudio[ext=m4a]/worstaudio" : "bestaudio[ext=m4a]/bestaudio";
 
   return new Promise((resolve, reject) => {
     const maxBytes = 24 * 1024 * 1024;
@@ -384,8 +370,8 @@ export async function downloadYoutubeMusicAudio(
         return;
       }
       const bytes = Buffer.concat(chunks, size);
-      if (bytes.byteLength < 12 || bytes.toString("ascii", 4, 8) !== "ftyp") {
-        finish(new Error("The downloader did not return a complete AAC/MP4 audio file."));
+      if (bytes.byteLength < 12) {
+        finish(new Error("The downloader did not return a complete audio file."));
         return;
       }
       finish(undefined, bytes);
@@ -503,7 +489,7 @@ export function sanitizeYoutubeMusicScraperOutput(
 
   return {
     status: outputStatus,
-    source: text(output.source) ?? "Uploaded YouTube Music scraper",
+    source: text(output.source) ?? "Uploaded God-Tier scraper",
     query: request.query,
     region: request.region,
     probeStreaming: request.probeStreaming,
