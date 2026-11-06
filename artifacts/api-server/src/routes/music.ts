@@ -700,10 +700,9 @@ async function createScraperMusicHlsSession(
   }
 
   const candidate = result.items.find((item) => {
-    if (item.category !== "song" || !item.id || !item.watchUrl || !item.creator) return false;
+    if (item.category !== "song" || !item.id || !item.watchUrl) return false;
     
-    // REMOVED: Strict YouTube 11-char ID check.
-    // REMOVED: Strict artist/title match (trusting the scraper's top result).
+    // REMOVED STRICT CHECKS to allow Audiomack URLs
     
     if (identity.durationSeconds && item.durationSeconds) {
       const allowedDifference = Math.max(10, identity.durationSeconds * 0.12);
