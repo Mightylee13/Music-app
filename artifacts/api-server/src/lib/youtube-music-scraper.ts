@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { access } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export type YoutubeMusicScraperRequest = {
   query: string;
@@ -63,6 +64,9 @@ export type YoutubeMusicScraperResult = {
 };
 
 const SCRIPT_RELATIVE_PATH = "attached_assets/scrape-ytmusik_1793744644906.js";
+const SCRIPT_PATH_FROM_MODULE = fileURLToPath(
+  new URL("../../../../attached_assets/scrape-ytmusik_1793744644906.js", import.meta.url),
+);
 const MAX_STDOUT_BYTES = 1_500_000;
 const MAX_CACHED_STREAMS = 80;
 const MAX_STREAM_TTL_MS = 15 * 60_000;
@@ -81,6 +85,7 @@ function audioBytesInEntry(entry: { variants: Partial<Record<YoutubeAudioQuality
 
 async function findUploadedScript(): Promise<string> {
   const candidates = [
+    SCRIPT_PATH_FROM_MODULE,
     path.resolve(process.cwd(), SCRIPT_RELATIVE_PATH),
     path.resolve(process.cwd(), "..", "..", SCRIPT_RELATIVE_PATH),
   ];

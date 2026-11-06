@@ -9,3 +9,7 @@ node_modules/
 **/*.sqlite-*
 *.tsbuildinfo
 pnpm-debug.log
+
+# Required production scraper; the workspace-wide ignore may otherwise omit it.
+!attached_assets/
+!attached_assets/scrape-ytmusik_1793744644906.js
