@@ -7,10 +7,14 @@ if (!query) {
     process.exit(0);
 }
 
-function runCmd(cmd, args, timeout = 8000) {
+function runCmd(cmd, args, timeout = 15000) {
     return new Promise((resolve, reject) => {
-        const child = execFile(cmd, args, { maxBuffer: 1024 * 1024 * 10, timeout }, (error, stdout) => {
-            if (error) reject(error);
+        const child = execFile(cmd, args, { maxBuffer: 1024 * 1024 * 10, timeout }, (error, stdout, stderr) => {
+            if (error) {
+                // Append stderr so the backend logs can see exactly why it failed
+                error.message += ` | stderr: ${stderr}`;
+                reject(error);
+            }
             else resolve(stdout);
         });
     });
@@ -22,27 +26,39 @@ async function getStream() {
     // 1. Audiomack (Primary)
     const audioPromise = new Promise(async (resolve, reject) => {
         try {
-            const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `https://audiomack.com/search?q=${query}`, '--dump-json', '--flat-playlist'], 6000);
+            console.error(`[Scraper] Trying Audiomack...`);
+            const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `https://audiomack.com/search?q=${encodeURIComponent(query)}`, '--dump-json', '--flat-playlist'], 15000);
             const results = out.trim().split('\n').filter(l => l.trim()).map(l => JSON.parse(l));
-            if (results.length === 0) throw new Error("No Audio");
+            if (results.length === 0) throw new Error("No Audio results");
             
-            const streamOut = await runCmd('yt-dlp', ['--quiet', '--no-warnings', results[0].url, '-f', 'bestaudio', '-g', '--no-playlist'], 6000);
+            const streamOut = await runCmd('yt-dlp', ['--quiet', '--no-warnings', results[0].url, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
             resolve({ url: streamOut.trim().split('\n')[0], source: 'Audiomack' });
-        } catch (e) { reject(e); }
+        } catch (e) { 
+            console.error(`[Scraper] Audiomack failed: ${e.message}`);
+            reject(e); 
+        }
     });
 
     // 2. SoundCloud (Secondary)
     const soundPromise = new Promise(async (resolve, reject) => {
         try {
-            const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `scsearch1:${query}`, '-f', 'bestaudio', '-g', '--no-playlist'], 6000);
+            console.error(`[Scraper] Trying SoundCloud...`);
+            const out = await runCmd('yt-dlp', ['--quiet', '--no-warnings', `scsearch1:${query}`, '-f', 'bestaudio', '-g', '--no-playlist'], 15000);
             resolve({ url: out.trim().split('\n')[0], source: 'SoundCloud' });
-        } catch (e) { reject(e); }
+        } catch (e) { 
+            console.error(`[Scraper] SoundCloud failed: ${e.message}`);
+            reject(e); 
+        }
     });
 
     // 3. YouTube Custom Script (Last Resort)
     const ytPromise = new Promise((resolve, reject) => {
-        const child = execFile('node', [`./attached_assets/scrape-ytmusik_1793744644906.js`, query, '--stream', '1'], { timeout: 4000 }, (err, stdout) => {
-            if (err) return reject(err);
+        console.error(`[Scraper] Trying YouTube...`);
+        const child = execFile('node', [`./attached_assets/scrape-ytmusik_1793744644906.js`, query, '--stream', '1'], { timeout: 5000 }, (err, stdout, stderr) => {
+            if (err) {
+                console.error(`[Scraper] YouTube failed: ${err.message}`);
+                return reject(err);
+            }
             try {
                 const data = JSON.parse(stdout);
                 const url = data.results?.songs?.[0]?.streaming?.stream_url;
@@ -54,10 +70,10 @@ async function getStream() {
     });
 
     try {
+        // Wait for the first one to succeed
         const winner = await Promise.any([audioPromise, soundPromise, ytPromise]);
         activeProcesses.forEach(p => { try { p.kill(); } catch(e) {} });
         
-        // Clean JSON Output
         console.log(JSON.stringify({
             status: true,
             source: winner.source,
@@ -74,8 +90,8 @@ async function getStream() {
             }
         }));
     } catch (error) {
-        // Clean JSON Error Output
-        console.log(JSON.stringify({ status: false, error: "Song not found on any platform." }));
+        console.error(`[Scraper] All failed: ${error.message}`);
+        console.log(JSON.stringify({ status: false, error: `Not found: ${error.message}` }));
     }
 }
 
