@@ -1,0 +1,11 @@
+{
+  "name": "lenzo-music",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.26.1",
+  "scripts": {
+    "build": "pnpm --filter @workspace/lenzo-music run build",
+    "start": "pnpm --filter @workspace/api-server run start",
+    "typecheck:web": "pnpm --filter @workspace/lenzo-music run typecheck"
+  }
+}
