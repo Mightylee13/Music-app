@@ -7,7 +7,7 @@ ENV YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3 python3-pip \
+  && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3 python3-pip curl \
   && pip3 install --break-system-packages --no-cache-dir yt-dlp \
   && rm -rf /var/lib/apt/lists/*
 
