@@ -65,7 +65,7 @@ export type YoutubeMusicScraperResult = {
 
 const SCRIPT_RELATIVE_PATH = "attached_assets/scrape-ytmusik_1793744644906.js";
 const SCRIPT_PATH_FROM_MODULE = fileURLToPath(
-  new URL("../../../../attached_assets/scrape-ytmusik_1793744644906.js", import.meta.url),
+  new URL("../../../../attached_assets/god-tier-music.js", import.meta.url)
 );
 const MAX_STDOUT_BYTES = 1_500_000;
 const MAX_CACHED_STREAMS = 80;
