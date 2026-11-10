@@ -6,10 +6,10 @@ ENV BASE_PATH=/
 ENV YT_DLP_PATH=/usr/local/bin/yt-dlp
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 
-# Added curl_cffi for browser impersonation
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3 python3-pip curl \
-  && pip3 install --break-system-packages --no-cache-dir yt-dlp curl_cffi \
+  && pip3 install --break-system-packages --no-cache-dir -U yt-dlp curl_cffi \
+  && yt-dlp --version \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
